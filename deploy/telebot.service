@@ -1,0 +1,16 @@
+
+[Unit]
+Description=Telegram Video Downloader Bot
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/telebot
+Environment="PYTHONUNBUFFERED=1"
+ExecStart=/opt/telebot/.venv/bin/python /opt/telebot/app.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
