@@ -286,8 +286,13 @@ def main():
     app.add_handler(CallbackQueryHandler(check_subscription_cb, pattern="^check_sub$"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    # Запуск фоновой задачи очистки
-    asyncio.create_task(cleanup_task_loop())
+    # Запуск фоновой задачи очистки после инициализации приложения
+    async def post_init(app: Application) -> None:
+        """Запускается после инициализации приложения, когда event loop уже работает"""
+        asyncio.create_task(cleanup_task_loop())
+        logger.info("Фоновая задача очистки запущена")
+    
+    app.post_init(post_init)
 
     logger.info("Bot started")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
