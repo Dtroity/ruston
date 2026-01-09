@@ -208,6 +208,35 @@ docker exec ruston-media-bot python cleanup_downloads.py
 
 ## Устранение проблем
 
+### Ошибка KeyError: 'ContainerConfig'
+
+Эта ошибка возникает при конфликте старых образов/контейнеров. Исправление:
+
+```bash
+# Быстрое исправление через скрипт
+chmod +x fix-docker-error.sh
+./fix-docker-error.sh
+```
+
+Или вручную:
+
+```bash
+# 1. Удалить все контейнеры и volumes
+docker-compose -f docker-compose.ruston.yml down -v
+docker rm -f ruston-media-bot 2>/dev/null || true
+
+# 2. Удалить старые образы
+docker images | grep ruston | awk '{print $3}' | xargs docker rmi -f
+docker rmi ruston_ruston-bot 2>/dev/null || true
+
+# 3. Очистить Docker кеш
+docker system prune -f
+
+# 4. Пересобрать и запустить
+docker-compose -f docker-compose.ruston.yml build --no-cache --pull
+docker-compose -f docker-compose.ruston.yml up -d
+```
+
 ### Бот не запускается
 
 ```bash

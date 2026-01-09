@@ -32,11 +32,20 @@ else
     echo "Старый бот не запущен через systemd"
 fi
 
-# Остановка Docker контейнера (если запущен)
-if docker ps | grep -q ruston-media-bot; then
-    echo "Остановка Docker контейнера..."
-    docker-compose -f docker-compose.ruston.yml stop 2>/dev/null || true
-    echo -e "${GREEN}✅ Docker контейнер остановлен${NC}"
+# Остановка и удаление Docker контейнера (если запущен)
+if docker ps -a | grep -q ruston-media-bot; then
+    echo "Остановка и удаление старого Docker контейнера..."
+    docker-compose -f docker-compose.ruston.yml down 2>/dev/null || true
+    docker rm -f ruston-media-bot 2>/dev/null || true
+    echo -e "${GREEN}✅ Старый Docker контейнер удален${NC}"
+fi
+
+# Удаление старого образа (если есть) для избежания конфликтов
+if docker images | grep -q ruston; then
+    echo "Удаление старого Docker образа..."
+    docker rmi ruston_ruston-bot 2>/dev/null || true
+    docker rmi $(docker images | grep ruston | awk '{print $3}') 2>/dev/null || true
+    echo -e "${GREEN}✅ Старые образы удалены${NC}"
 fi
 
 # 2. Обновление кода из репозитория
@@ -115,11 +124,21 @@ echo -e "${YELLOW}📋 Шаг 6: Установка прав на скрипты
 chmod +x start-ruston-bot.sh stop-ruston-bot.sh remove-ruston-bot.sh cleanup_downloads.py 2>/dev/null || true
 echo -e "${GREEN}✅ Права установлены${NC}"
 
-# 7. Сборка Docker образа
+# 7. Очистка Docker (опционально, для решения проблем)
 echo ""
-echo -e "${YELLOW}📋 Шаг 7: Сборка Docker образа...${NC}"
+echo -e "${YELLOW}📋 Шаг 7: Очистка Docker кеша (опционально)...${NC}"
+echo "Очистить Docker кеш? Это может помочь при ошибках сборки (y/n)"
+read -r response
+if [[ "$response" =~ ^([yY][eE][sS]|[yY])$ ]]; then
+    docker system prune -f
+    echo -e "${GREEN}✅ Docker кеш очищен${NC}"
+fi
+
+# 8. Сборка Docker образа
+echo ""
+echo -e "${YELLOW}📋 Шаг 8: Сборка Docker образа...${NC}"
 echo "Это может занять несколько минут..."
-docker-compose -f docker-compose.ruston.yml build --no-cache
+docker-compose -f docker-compose.ruston.yml build --no-cache --pull
 
 if [ $? -eq 0 ]; then
     echo -e "${GREEN}✅ Docker образ собран${NC}"
@@ -128,16 +147,18 @@ else
     exit 1
 fi
 
-# 8. Запуск бота
+# 9. Запуск бота
 echo ""
-echo -e "${YELLOW}📋 Шаг 8: Запуск бота...${NC}"
+echo -e "${YELLOW}📋 Шаг 9: Запуск бота...${NC}"
+# Убеждаемся, что старые контейнеры удалены перед запуском
+docker-compose -f docker-compose.ruston.yml down 2>/dev/null || true
 docker-compose -f docker-compose.ruston.yml up -d
 
 sleep 3
 
-# 9. Проверка статуса
+# 10. Проверка статуса
 echo ""
-echo -e "${YELLOW}📋 Шаг 9: Проверка статуса...${NC}"
+echo -e "${YELLOW}📋 Шаг 10: Проверка статуса...${NC}"
 if docker ps | grep -q ruston-media-bot; then
     echo -e "${GREEN}✅ Бот успешно запущен!${NC}"
     echo ""
