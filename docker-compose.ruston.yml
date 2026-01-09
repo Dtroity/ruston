@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  ruston-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ruston-media-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./downloads:/app/downloads
+    working_dir: /app
+    networks:
+      - ruston-bot-network
+
+networks:
+  ruston-bot-network:
+    driver: bridge
+    name: ruston-media-network

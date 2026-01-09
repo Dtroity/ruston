@@ -1,12 +1,15 @@
 
 import os
 import re
+import sys
 import asyncio
 import logging
 import tempfile
+import time
+from collections import defaultdict, deque
 from pathlib import Path
 from dotenv import load_dotenv
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict
 
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup,
@@ -29,11 +32,21 @@ ALLOWED_DOMAINS = [x.strip().lower() for x in os.getenv("ALLOWED_DOMAINS", "yout
 DOWNLOAD_DIR = Path(os.getenv("DOWNLOAD_DIR", "./downloads"))
 DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
+# Настройки защиты от спама
+RATE_LIMIT_SECONDS = int(os.getenv("RATE_LIMIT_SECONDS", "10"))  # Минимум секунд между запросами
+MAX_REQUESTS_PER_MINUTE = int(os.getenv("MAX_REQUESTS_PER_MINUTE", "5"))  # Максимум запросов в минуту
+MAX_REQUESTS_PER_HOUR = int(os.getenv("MAX_REQUESTS_PER_HOUR", "20"))  # Максимум запросов в час
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
 logger = logging.getLogger("telebot")
+
+# Структуры для защиты от спама
+user_last_request: Dict[int, float] = {}  # user_id -> timestamp последнего запроса
+user_request_times: Dict[int, deque] = defaultdict(lambda: deque())  # user_id -> очередь времен запросов
+user_last_url: Dict[int, str] = {}  # user_id -> последний URL
 
 URL_RE = re.compile(
     r'^(https?://)?([A-Za-z0-9.-]+\.[A-Za-z]{2,})(/[^\s]*)?$',
@@ -60,6 +73,53 @@ async def is_subscribed(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> boo
     except Exception as e:
         logger.warning("Subscription check failed: %s", e)
         return False
+
+def check_spam_protection(user_id: int, url: str) -> Tuple[bool, Optional[str]]:
+    """
+    Проверяет защиту от спама.
+    Возвращает (is_spam, error_message)
+    """
+    current_time = time.time()
+    
+    # Админы не ограничены
+    if user_id in ADMINS:
+        user_last_request[user_id] = current_time
+        user_request_times[user_id].append(current_time)
+        user_last_url[user_id] = url
+        return False, None
+    
+    # Проверка минимального интервала между запросами
+    if user_id in user_last_request:
+        time_since_last = current_time - user_last_request[user_id]
+        if time_since_last < RATE_LIMIT_SECONDS:
+            remaining = int(RATE_LIMIT_SECONDS - time_since_last) + 1
+            return True, f"⏳ Слишком частые запросы. Подождите {remaining} секунд перед следующим запросом."
+    
+    # Проверка на повторяющиеся URL
+    if user_id in user_last_url and user_last_url[user_id] == url:
+        return True, "⚠️ Вы уже запрашивали этот URL. Пожалуйста, отправьте другую ссылку."
+    
+    # Очистка старых записей (старше часа)
+    user_requests = user_request_times[user_id]
+    while user_requests and current_time - user_requests[0] > 3600:
+        user_requests.popleft()
+    
+    # Проверка лимита запросов в минуту
+    recent_minute = [t for t in user_requests if current_time - t <= 60]
+    if len(recent_minute) >= MAX_REQUESTS_PER_MINUTE:
+        return True, f"⏳ Превышен лимит запросов ({MAX_REQUESTS_PER_MINUTE} в минуту). Подождите немного."
+    
+    # Проверка лимита запросов в час
+    recent_hour = [t for t in user_requests if current_time - t <= 3600]
+    if len(recent_hour) >= MAX_REQUESTS_PER_HOUR:
+        return True, f"⏳ Превышен лимит запросов ({MAX_REQUESTS_PER_HOUR} в час). Подождите час."
+    
+    # Обновление данных
+    user_last_request[user_id] = current_time
+    user_request_times[user_id].append(current_time)
+    user_last_url[user_id] = url
+    
+    return False, None
 
 def ytdlp_download(url: str, tmp_dir: Path) -> Tuple[Optional[Path], Optional[str]]:
     ydl_opts = {
@@ -144,6 +204,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # Проверка защиты от спама
+    is_spam, spam_message = check_spam_protection(user.id, text)
+    if is_spam:
+        logger.warning(f"Spam protection triggered for user {user.id}: {spam_message}")
+        await update.message.reply_text(spam_message)
+        return
+
     await update.message.reply_text("⏬ Загружаю видео, подождите...")
 
     try:
@@ -173,6 +240,40 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.exception("Download error: %s", e)
         await update.message.reply_text("Произошла ошибка при загрузке. Попробуйте позже или другую ссылку.")
 
+async def cleanup_task_loop():
+    """
+    Фоновая задача для автоматической очистки старых файлов из downloads/.
+    Запускается каждые 3 дня.
+    """
+    import subprocess
+    CLEANUP_INTERVAL = 3 * 24 * 60 * 60  # 3 дня в секундах
+    
+    # Первый запуск через 3 дня после старта
+    await asyncio.sleep(CLEANUP_INTERVAL)
+    
+    while True:
+        try:
+            logger.info("Запуск автоматической очистки старых файлов...")
+            result = subprocess.run(
+                [sys.executable, "cleanup_downloads.py"],
+                capture_output=True,
+                text=True,
+                cwd=Path(__file__).parent
+            )
+            if result.returncode == 0:
+                logger.info("Очистка завершена успешно")
+                if result.stdout:
+                    logger.info(f"Вывод очистки: {result.stdout}")
+            else:
+                logger.error(f"Ошибка при очистке: {result.stderr}")
+            
+            # Ожидание до следующей очистки
+            await asyncio.sleep(CLEANUP_INTERVAL)
+        except Exception as e:
+            logger.exception(f"Ошибка в задаче очистки: {e}")
+            # При ошибке ждем час перед повтором
+            await asyncio.sleep(3600)
+
 def main():
     if not BOT_TOKEN:
         raise SystemExit("BOT_TOKEN is not set")
@@ -184,6 +285,9 @@ def main():
     app.add_handler(CommandHandler("help", help_cmd))
     app.add_handler(CallbackQueryHandler(check_subscription_cb, pattern="^check_sub$"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+
+    # Запуск фоновой задачи очистки
+    asyncio.create_task(cleanup_task_loop())
 
     logger.info("Bot started")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
