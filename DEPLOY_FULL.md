@@ -170,6 +170,29 @@ docker-compose -f docker-compose.ruston.yml stop
 ### Перезапуск бота
 
 ```bash
+# Быстрый перезапуск (после обновления .env)
+./restart-ruston-bot.sh
+
+# Или вручную
+docker-compose -f docker-compose.ruston.yml restart
+
+# Или полный перезапуск (остановка + запуск)
+docker-compose -f docker-compose.ruston.yml stop
+docker-compose -f docker-compose.ruston.yml up -d
+```
+
+### Обновление .env файла
+
+После изменения `.env` файла необходимо перезагрузить бота:
+
+```bash
+# 1. Отредактировать .env
+nano .env
+
+# 2. Перезагрузить бота
+./restart-ruston-bot.sh
+
+# Или вручную
 docker-compose -f docker-compose.ruston.yml restart
 ```
 
