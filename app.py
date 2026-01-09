@@ -56,7 +56,7 @@ URL_RE = re.compile(
 
 DISCLAIMER = (
     "⚠️ Используйте только для собственных материалов или с разрешения правообладателя. "
-    "Бот: @ruston_bot"
+    "Бот: @rustronbot"
 )
 
 def is_allowed_domain(url: str) -> bool:
