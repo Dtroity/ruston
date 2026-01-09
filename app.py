@@ -6,6 +6,7 @@ import asyncio
 import logging
 import tempfile
 import time
+import threading
 from collections import defaultdict, deque
 from pathlib import Path
 from dotenv import load_dotenv
@@ -54,9 +55,8 @@ URL_RE = re.compile(
 )
 
 DISCLAIMER = (
-    "⚠️ Используйте бота **только для скачивания собственных материалов**, "
-    "материалов с разрешения правообладателя или материалов в общественном достоянии. "
-    "Нарушение TOS платформ и авторских прав может быть незаконным."
+    "⚠️ Используйте только для собственных материалов или с разрешения правообладателя. "
+    "Бот: @ruston_bot"
 )
 
 def is_allowed_domain(url: str) -> bool:
@@ -240,16 +240,16 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.exception("Download error: %s", e)
         await update.message.reply_text("Произошла ошибка при загрузке. Попробуйте позже или другую ссылку.")
 
-async def cleanup_task_loop():
+def cleanup_task_loop_thread():
     """
     Фоновая задача для автоматической очистки старых файлов из downloads/.
-    Запускается каждые 3 дня.
+    Запускается каждые 3 дня в отдельном потоке.
     """
     import subprocess
     CLEANUP_INTERVAL = 3 * 24 * 60 * 60  # 3 дня в секундах
     
     # Первый запуск через 3 дня после старта
-    await asyncio.sleep(CLEANUP_INTERVAL)
+    time.sleep(CLEANUP_INTERVAL)
     
     while True:
         try:
@@ -268,11 +268,11 @@ async def cleanup_task_loop():
                 logger.error(f"Ошибка при очистке: {result.stderr}")
             
             # Ожидание до следующей очистки
-            await asyncio.sleep(CLEANUP_INTERVAL)
+            time.sleep(CLEANUP_INTERVAL)
         except Exception as e:
             logger.exception(f"Ошибка в задаче очистки: {e}")
             # При ошибке ждем час перед повтором
-            await asyncio.sleep(3600)
+            time.sleep(3600)
 
 def main():
     if not BOT_TOKEN:
@@ -286,13 +286,10 @@ def main():
     app.add_handler(CallbackQueryHandler(check_subscription_cb, pattern="^check_sub$"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
-    # Запуск фоновой задачи очистки после инициализации приложения
-    async def post_init(app: Application) -> None:
-        """Запускается после инициализации приложения, когда event loop уже работает"""
-        asyncio.create_task(cleanup_task_loop())
-        logger.info("Фоновая задача очистки запущена")
-    
-    app.post_init(post_init)
+    # Запуск фоновой задачи очистки в отдельном потоке
+    cleanup_thread = threading.Thread(target=cleanup_task_loop_thread, daemon=True)
+    cleanup_thread.start()
+    logger.info("Фоновая задача очистки запущена в отдельном потоке")
 
     logger.info("Bot started")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
